@@ -21,9 +21,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/kube-deploy/cluster-api-gcp/cloud/google"
+	"k8s.io/kube-deploy/cluster-api-gcp/cloud/terraform"
 	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api/client"
-	"k8s.io/kube-deploy/cluster-api-gcp/cloud/google"
 )
 
 // An actuator that just logs instead of doing anything.
@@ -41,6 +42,8 @@ func NewMachineActuator(cloud string, kubeadmToken string, machineClient client.
 		return google.NewMachineActuator(kubeadmToken, machineClient)
 	case "test", "aws", "azure":
 		return &loggingMachineActuator{}, nil
+	case "terraform":
+		return terraform.NewMachineActuator(kubeadmToken, machineClient)
 	default:
 		return nil, fmt.Errorf("Not recognized cloud provider: %s\n", cloud)
 	}

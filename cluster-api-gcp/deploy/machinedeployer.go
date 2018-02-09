@@ -3,9 +3,10 @@ package deploy
 import (
 	"fmt"
 
-	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api-gcp/cloud"
 	"k8s.io/kube-deploy/cluster-api-gcp/cloud/google"
+	"k8s.io/kube-deploy/cluster-api-gcp/cloud/terraform"
+	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 )
 
 // Provider-specific machine logic the deployer needs.
@@ -23,10 +24,12 @@ type machineDeployer interface {
 	PostDelete(cluster *clusterv1.Cluster, machines []*clusterv1.Machine) error
 }
 
-func newMachineDeployer(cloud string, kubeadmToken string) (machineDeployer,error) {
+func newMachineDeployer(cloud string, kubeadmToken string) (machineDeployer, error) {
 	switch cloud {
 	case "google":
 		return google.NewMachineActuator(kubeadmToken, nil)
+	case "terraform":
+		return terraform.NewMachineActuator(kubeadmToken, nil)
 	default:
 		return nil, fmt.Errorf("Not recognized cloud provider: %s\n", cloud)
 	}
