@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"reflect"
 	"strings"
@@ -137,34 +139,31 @@ func (gce *GCEClient) CreateMachineController(cluster *clusterv1.Cluster, initia
 }
 
 func (gce *GCEClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Machine) error {
-	glog.Infof("TERRAFORM CREATE.\n")
-
 	config, err := gce.providerconfig(machine.Spec.ProviderConfig)
 	if err != nil {
 		return gce.handleMachineError(machine, apierrors.InvalidMachineConfiguration(
 			"Cannot unmarshal providerConfig field: %v", err))
 	}
 
-	if verr := gce.validateMachine(machine, config); verr != nil {
-		return gce.handleMachineError(machine, verr)
+	name := machine.ObjectMeta.Name
+	project := config.Project
+	zone := config.Zone
+	machine_type := config.MachineType
+
+	temp_dir, err := ioutil.TempDir("/tmp", "cluster-api")
+	if err != nil {
+	   return err
 	}
+	copyFile("./cloud/terraform/templates/gcp-instance.tf", temp_dir)
+
+	var_name := fmt.Sprintf("instance_name=%s", name)
+	var_zone := fmt.Sprintf("instance_zone=%s", zone)
+	var_type := fmt.Sprintf("instance_type=%s", machine_type)
+	var_project := fmt.Sprintf("project=%s", project)
+	var_uid := fmt.Sprintf("uid=%v", machine.ObjectMeta.UID)
 
 	var metadata map[string]string
-	if cluster.Spec.ClusterNetwork.DNSDomain == "" {
-		return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.DNSDomain")
-	}
-	if getSubnet(cluster.Spec.ClusterNetwork.Pods) == "" {
-		return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.Pods")
-	}
-	if getSubnet(cluster.Spec.ClusterNetwork.Services) == "" {
-		return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.Services")
-	}
-	if machine.Spec.Versions.Kubelet == "" {
-		return errors.New("invalid master configuration: missing Machine.Spec.Versions.Kubelet")
-	}
-
-	image, preloaded := gce.getImage(machine, config)
-
+	preloaded := false
 	if apiutil.IsMaster(machine) {
 		if machine.Spec.Versions.ControlPlane == "" {
 			return gce.handleMachineError(machine, apierrors.InvalidMachineConfiguration(
@@ -200,138 +199,67 @@ func (gce *GCEClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		}
 	}
 
-	var metadataItems []*compute.MetadataItems
-	for k, v := range metadata {
-		v := v // rebind scope to avoid loop aliasing below
-		metadataItems = append(metadataItems, &compute.MetadataItems{
-			Key:   k,
-			Value: &v,
-		})
-	}
+	terraformOutputBuffer := bytes.NewBuffer([]byte{})
 
-	instance, err := gce.instanceIfExists(machine)
+	cmd := NewCmd(os.Stderr, terraformOutputBuffer)
+	err = cmd.Run(os.Stdout, temp_dir, []string{"init"}, true)
 	if err != nil {
-		return err
+	   glog.Errorf(fmt.Sprintf("%s", terraformOutputBuffer))
+	   return err
 	}
 
-	name := machine.ObjectMeta.Name
-	project := config.Project
-	zone := config.Zone
-	diskSize := int64(10)
+	fqin := fmt.Sprintf("%s/%s/%s", project, zone, name)
 
-	// Our preloaded image already has a lot stored on it, so increase the
-	// disk size to have more free working space.
-	if preloaded {
-		diskSize = 30
+	terraformOutputBuffer = bytes.NewBuffer([]byte{})
+	cmd = NewCmd(os.Stderr, terraformOutputBuffer)
+	err = cmd.Run(os.Stdout, temp_dir, []string{"import", "-var", var_project, "google_compute_instance.default", fqin}, true)
+	if err != nil {
+	   // Import failure is OK if the resource doesn't exist
+	   glog.Warningf(fmt.Sprintf("%s", terraformOutputBuffer))
 	}
 
-	if instance == nil {
-		labels := map[string]string{
-			UIDLabelKey: fmt.Sprintf("%v", machine.ObjectMeta.UID),
-		}
-		if gce.machineClient == nil {
-			labels[BootstrapLabelKey] = "true"
-		}
+	terraformOutputBuffer = bytes.NewBuffer([]byte{})
+	cmd = NewCmd(os.Stderr, terraformOutputBuffer)
+	var args []string
+	args = append(args, "apply")
+	args = append(args, "-auto-approve")
+	args = append(args, "-var", var_name)
+	args = append(args, "-var", var_zone)
+	args = append(args, "-var", var_type)
+	args = append(args, "-var", var_project)
+	args = append(args, "-var", var_uid)
+	args = append(args, "-var", fmt.Sprintf("startup_script=%v}", metadata["startup-script"]))
 
-		op, err := gce.service.Instances.Insert(project, zone, &compute.Instance{
-			Name:        name,
-			MachineType: fmt.Sprintf("zones/%s/machineTypes/%s", zone, config.MachineType),
-			NetworkInterfaces: []*compute.NetworkInterface{
-				{
-					Network: "global/networks/default",
-					AccessConfigs: []*compute.AccessConfig{
-						{
-							Type: "ONE_TO_ONE_NAT",
-							Name: "External NAT",
-						},
-					},
-				},
-			},
-			Disks: []*compute.AttachedDisk{
-				{
-					AutoDelete: true,
-					Boot:       true,
-					InitializeParams: &compute.AttachedDiskInitializeParams{
-						SourceImage: image,
-						DiskSizeGb:  diskSize,
-					},
-				},
-			},
-			Metadata: &compute.Metadata{
-				Items: metadataItems,
-			},
-			Tags: &compute.Tags{
-				Items: []string{"https-server"},
-			},
-			Labels: labels,
-		}).Do()
-
-		if err == nil {
-			err = gce.waitForOperation(config, op)
-		}
-
-		if err != nil {
-			return gce.handleMachineError(machine, apierrors.CreateMachine(
-				"error creating GCE instance: %v", err))
-		}
-
-		// If we have a machineClient, then annotate the machine so that we
-		// remember exactly what VM we created for it.
-		if gce.machineClient != nil {
-			return gce.updateAnnotations(machine)
-		}
-	} else {
-		glog.Infof("Skipped creating a VM that already exists.\n")
+	err = cmd.Run(os.Stdout, temp_dir, args, true)
+	if err != nil {
+	   glog.Errorf(fmt.Sprintf("%s", terraformOutputBuffer))
+	   return err
 	}
-
+	
 	return nil
 }
 
+func copyFile(file_path string, temp_dir string) {
+  from, err := os.Open(file_path)
+  if err != nil {
+    glog.Fatal(err)
+  }
+  defer from.Close()
+
+  to, err := os.OpenFile(temp_dir + "/instance.tf", os.O_RDWR|os.O_CREATE, 0666)
+  if err != nil {
+    glog.Fatal(err)
+  }
+  defer to.Close()
+
+  _, err = io.Copy(to, from)
+  if err != nil {
+    glog.Fatal(err)
+  }
+}
+
 func (gce *GCEClient) Delete(machine *clusterv1.Machine) error {
-	instance, err := gce.instanceIfExists(machine)
-	if err != nil {
-		return err
-	}
-
-	if instance == nil {
-		glog.Infof("Skipped deleting a VM that is already deleted.\n")
-		return nil
-	}
-
-	config, err := gce.providerconfig(machine.Spec.ProviderConfig)
-	if err != nil {
-		return gce.handleMachineError(machine,
-			apierrors.InvalidMachineConfiguration("Cannot unmarshal providerConfig field: %v", err))
-	}
-
-	if verr := gce.validateMachine(machine, config); verr != nil {
-		return gce.handleMachineError(machine, verr)
-	}
-
-	var project, zone, name string
-
-	if machine.ObjectMeta.Annotations != nil {
-		project = machine.ObjectMeta.Annotations[ProjectAnnotationKey]
-		zone = machine.ObjectMeta.Annotations[ZoneAnnotationKey]
-		name = machine.ObjectMeta.Annotations[NameAnnotationKey]
-	}
-
-	// If the annotations are missing, fall back on providerConfig
-	if project == "" || zone == "" || name == "" {
-		project = config.Project
-		zone = config.Zone
-		name = machine.ObjectMeta.Name
-	}
-
-	op, err := gce.service.Instances.Delete(project, zone, name).Do()
-	if err == nil {
-		err = gce.waitForOperation(config, op)
-	}
-	if err != nil {
-		return gce.handleMachineError(machine, apierrors.DeleteMachine(
-			"error deleting GCE instance: %v", err))
-	}
-
+	glog.Infof("TERRAFORM DELETE.\n")
 	return nil
 }
 
@@ -340,68 +268,35 @@ func (gce *GCEClient) PostDelete(cluster *clusterv1.Cluster, machines []*cluster
 }
 
 func (gce *GCEClient) Update(cluster *clusterv1.Cluster, goalMachine *clusterv1.Machine) error {
-	// Before updating, do some basic validation of the object first.
-	config, err := gce.providerconfig(goalMachine.Spec.ProviderConfig)
-	if err != nil {
-		return gce.handleMachineError(goalMachine,
-			apierrors.InvalidMachineConfiguration("Cannot unmarshal providerConfig field: %v", err))
-	}
-	if verr := gce.validateMachine(goalMachine, config); verr != nil {
-		return gce.handleMachineError(goalMachine, verr)
-	}
+	glog.Infof("TERRAFORM UPDATE.\n")
+	return nil
+}
 
-	status, err := gce.instanceStatus(goalMachine)
-	if err != nil {
-		return err
-	}
-	currentMachine := (*clusterv1.Machine)(status)
+type Cmd struct {
+	stderr       io.Writer
+	outputBuffer io.Writer
+}
 
-	if currentMachine == nil {
-		instance, err := gce.instanceIfExists(goalMachine)
-		if err != nil {
-			return err
-		}
-		if instance != nil && instance.Labels[BootstrapLabelKey] != "" {
-			glog.Infof("Populating current state for boostrap machine %v", goalMachine.ObjectMeta.Name)
-			return gce.updateAnnotations(goalMachine)
-		} else {
-			return fmt.Errorf("Cannot retrieve current state to update machine %v", goalMachine.ObjectMeta.Name)
-		}
+func NewCmd(stderr, outputBuffer io.Writer) Cmd {
+	return Cmd{
+		stderr:       stderr,
+		outputBuffer: outputBuffer,
 	}
+}
 
-	currentMachine, err = currentMachineActualStatus(gce, currentMachine)
-	if err != nil {
-		glog.Errorf("Could not get current machine status.... %v", err)
-		return err
-	}
+func (c Cmd) Run(stdout io.Writer, workingDirectory string, args []string, debug bool) error {
+	command := exec.Command("terraform", args...)
+	command.Dir = workingDirectory
 
-	if !gce.requiresUpdate(currentMachine, goalMachine) {
-		return nil
-	}
-
-	if apiutil.IsMaster(currentMachine) {
-		glog.Infof("Doing an in-place upgrade for master.\n")
-		err = gce.updateMasterInplace(currentMachine, goalMachine)
-		if err != nil {
-			glog.Errorf("master inplace update failed: %v", err)
-		}
+	if debug {
+		command.Stdout = io.MultiWriter(stdout, c.outputBuffer)
+		command.Stderr = io.MultiWriter(c.stderr, c.outputBuffer)
 	} else {
-		glog.Infof("re-creating machine %s for update.", currentMachine.ObjectMeta.Name)
-		err = gce.Delete(currentMachine)
-		if err != nil {
-			glog.Errorf("delete machine %s for update failed: %v", currentMachine.ObjectMeta.Name, err)
-		} else {
-			err = gce.Create(cluster, goalMachine)
-			if err != nil {
-				glog.Errorf("create machine %s for update failed: %v", goalMachine.ObjectMeta.Name, err)
-			}
-		}
+		command.Stdout = c.outputBuffer
+		command.Stderr = c.outputBuffer
 	}
-	if err != nil {
-		return err
-	}
-	err = gce.updateInstanceStatus(goalMachine)
-	return err
+
+	return command.Run()
 }
 
 func (gce *GCEClient) Exists(machine *clusterv1.Machine) (bool, error) {

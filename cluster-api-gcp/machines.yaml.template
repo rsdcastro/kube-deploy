@@ -8,8 +8,8 @@ items:
   spec:
     providerConfig: >
       {
-        "apiVersion": "gceproviderconfig/v1alpha1",
-        "kind": "GCEProviderConfig",
+        "apiVersion": "terraformproviderconfig/v1alpha1",
+        "kind": "TerraformProviderConfig",
         "project": "$GCLOUD_PROJECT",
         "zone": "us-central1-f",
         "machineType": "n1-standard-2",
@@ -32,8 +32,8 @@ items:
   spec:
     providerConfig: >
       {
-        "apiVersion": "gceproviderconfig/v1alpha1",
-        "kind": "GCEProviderConfig",
+        "apiVersion": "terraformproviderconfig/v1alpha1",
+        "kind": "TerraformProviderConfig",
         "project": "$GCLOUD_PROJECT",
         "zone": "us-central1-f",
         "machineType": "n1-standard-1",

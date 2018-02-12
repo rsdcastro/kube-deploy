@@ -11,6 +11,6 @@ spec:
         dnsDomain: "cluster.local"
     providerConfig: >
       {
-        "apiVersion": "gceproviderconfig/v1alpha1",
-        "kind": "GCEProviderConfig"
+        "apiVersion": "terraformproviderconfig/v1alpha1",
+        "kind": "TerraformProviderConfig"
       }

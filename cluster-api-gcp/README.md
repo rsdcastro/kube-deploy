@@ -10,6 +10,8 @@ Follow the steps listed at [CONTRIBUTING.md](https://github.com/kubernetes/kube-
 1. Build the `cluster-api-gcp` tool
 2. Generate base `machines.yaml` file configured for your GCP project
 
+For Terraform prototype, [download ``terraform`` binary](https://www.terraform.io/downloads.html) and place is in kube-deploy/cluster-api-gcp.
+
 ### Creating a cluster
 
 1. *Optional* update `machines.yaml` to give your preferred GCP zone in
