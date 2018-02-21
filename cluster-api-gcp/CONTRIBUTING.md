@@ -8,10 +8,16 @@ If you don't have a Google Cloud Project, please [create one](https://cloud.goog
 
 ### Create Firewall
 
-Create a firewall rule to allow communication from kubectl (and nodes) to the control plane.
+1. Create a firewall rule to allow communication from kubectl (and nodes) to the control plane.
 
    ```bash
-   gcloud compute firewall-rules create cluster-api-open --allow=TCP:443 --source-ranges=0.0.0.0/0 --target-tags='https-server'
+   gcloud compute firewall-rules create cluster-api-control-plane --allow=TCP:443 --source-ranges=0.0.0.0/0 --target-tags='https-server'
+   ```
+
+1. Create a firewall rule to SSH into the VM
+
+   ```bash
+   gcloud compute firewall-rules create cluster-api-ssh --allow=TCP:22 --source-ranges=0.0.0.0/0 --target-tags='https-server'
    ```
 
 ### Install Google Cloud SDK (gcloud)
@@ -32,15 +38,25 @@ Steps to follow:
 
 In order to use the GCP machine controller, you need to configure the credentials so that the code has access to the GCP project where resources will be created.
 
+There are two credentials to be used: for SSH access and for application access to GCP's API.
+
+#### SSH access 
+
+    ```bash
+    $ gcloud auth login
+    ```
+
+#### Application Access
+
 You can set it in two ways, as explained below.
 
-#### Environment Variable GOOGLE_APPLICATION_CREDENTIALS
+##### Option A: Environment Variable GOOGLE_APPLICATION_CREDENTIALS
 
 Steps to follow:
 1. Verify that the environment variable `GOOGLE_APPLICATION_CREDENTIALS` is set pointing to valid service account credentials
 2. If not set, follow the [instructions on Google Cloud Platform site](https://cloud.google.com/docs/authentication/getting-started) to have it set up.
 
-#### Login Using Cloud SDK
+##### Option B: Application Login Using Cloud SDK
 
 The alternative is to set the client credentials via gcloud by executing the command line below.
 
@@ -100,7 +116,9 @@ After making changes to the machine controller or the actuator, you need to foll
 
 NOTE: that the image will be pushed to `gcr.io/$(GCLOUD_PROJECT)/machine-controller`. Image storage is a billable resource.
 
-2. Rebuild cluster-api-gcp
+2. In order to pick up your changes, you'll need to change `machineControllerImage` in `cloud/terraform/pods.go` to point to your container.
+
+3. Rebuild cluster-api-gcp
 
 	```bash
     $ cd ..
