@@ -1,11 +1,15 @@
-GCLOUD_PROJECT ?= $(shell /usr/bin/gcloud config get-value project)
+GCLOUD_PROJECT ?= $(shell gcloud config get-value project)
 NAME=machine-controller
 VERSION=0.19
+
+copy-terraform:
+	cp -a ../cloud/terraform/bin .
+	cp -a ../cloud/terraform/templates .
 
 staticbuild:
 	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' .
 
-image: staticbuild
+image: staticbuild copy-terraform
 	docker build -t "gcr.io/$(GCLOUD_PROJECT)/$(NAME):$(VERSION)" .
 
 push: image

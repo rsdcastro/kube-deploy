@@ -154,7 +154,12 @@ func (gce *GCEClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if err != nil {
 	   return err
 	}
-	copyFile("./cloud/terraform/templates/gcp-instance.tf", temp_dir)
+
+	path := "./cloud/terraform/templates/gcp-instance.tf"
+	if _, err := os.Stat("./bin/gcp-instance.tf"); err == nil {
+	   path = "./bin/gcp-instance.tf"
+	}
+	copyFile(path, temp_dir)
 
 	var_name := fmt.Sprintf("instance_name=%s", name)
 	var_zone := fmt.Sprintf("instance_zone=%s", zone)
