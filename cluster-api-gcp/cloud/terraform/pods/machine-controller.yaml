@@ -14,7 +14,7 @@ spec:
       image: {{ .Image }}
       args:
         - --token={{ .Token }}
-        - --cloud=google
+        - --cloud=terraform
         - --kubeconfig=/etc/kubernetes/admin.conf
       volumeMounts:
         - name: config
