@@ -19,6 +19,8 @@ each machine's `providerConfig` field.
 1. *Optional*: Update `cluster.yaml` to set a custom cluster name.
 1. Create a cluster: `./cluster-api-gcp create -c cluster.yaml -m machines.yaml`
 
+For Terraform prototype, use ``-p terraform`` when calling cluster-api-gcp.
+
 During cluster creation, you can watch the machine resources get created in Kubernetes,
 see the corresponding virtual machines created in GCP, and then finally see nodes
 join the cluster:
