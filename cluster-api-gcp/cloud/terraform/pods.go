@@ -27,7 +27,7 @@ import (
 	"github.com/golang/glog"
 )
 
-var machineControllerImage = "gcr.io/k8s-cluster-api/machine-controller:0.19"
+var machineControllerImage = "gcr.io/gke-rdc-test/machine-controller:0.19"
 
 func init() {
 	if img, ok := os.LookupEnv("MACHINE_CONTROLLER_IMAGE"); ok {
@@ -36,7 +36,7 @@ func init() {
 }
 
 func CreateMachineControllerPod(token string) error {
-	tmpl, err := template.ParseFiles("cloud/google/pods/machine-controller.yaml")
+	tmpl, err := template.ParseFiles("cloud/terraform/pods/machine-controller.yaml")
 	if err != nil {
 		return err
 	}
